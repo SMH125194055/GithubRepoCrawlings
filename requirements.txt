@@ -1,0 +1,6 @@
+# requirements.txt
+requests
+psycopg2-binary
+tenacity
+python-dotenv
+dataclasses-json

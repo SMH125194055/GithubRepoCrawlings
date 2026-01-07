@@ -1,0 +1,102 @@
+# .github/workflows/crawl.yml
+name: GitHub Repository Crawler
+
+on:
+  # Run manually
+  workflow_dispatch:
+  # Run daily at midnight UTC
+  schedule:
+    - cron: '0 0 * * *'
+  # Run on push to main (for testing)
+  push:
+    branches: [main]
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    
+    # PostgreSQL service container
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: github_crawler
+        ports:
+          - 5432:5432
+        # Health check to ensure DB is ready
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      # Step 1: Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Setup Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Step 4: Setup PostgreSQL schema
+      - name: Setup PostgreSQL
+        env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: github_crawler
+        run: |
+          psql -f scripts/setup_database.sql
+
+      # Step 5: Crawl GitHub repositories
+      - name: Crawl Stars
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Default token, no setup needed!
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_NAME: github_crawler
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          MAX_REPOS: 100000
+          OUTPUT_PATH: repositories.csv
+        run: |
+          python -m src.main
+
+      # Step 6: Dump database to JSON
+      - name: Export Database
+        env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: github_crawler
+        run: |
+          # Export as CSV
+          psql -c "\COPY (SELECT * FROM repositories ORDER BY stargazer_count DESC) TO 'db_dump.csv' WITH CSV HEADER"
+          
+          # Also create a JSON export
+          psql -t -c "SELECT json_agg(r) FROM (SELECT * FROM repositories ORDER BY stargazer_count DESC LIMIT 1000) r" > top_repos.json
+
+      # Step 7: Upload artifacts
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: crawler-results
+          path: |
+            repositories.csv
+            db_dump.csv
+            top_repos.json
+          retention-days: 30
