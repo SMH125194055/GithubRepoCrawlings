@@ -1,6 +1,14 @@
 # requirements.txt
-requests
-psycopg2-binary
-tenacity
-python-dotenv
-dataclasses-json
+# GitHub Crawler Dependencies
+
+# HTTP client for API calls
+requests==2.31.0
+
+# PostgreSQL adapter
+psycopg2-binary==2.9.9
+
+# Retry logic with exponential backoff
+tenacity==8.2.3
+
+# Environment variable management (optional, for local dev)
+python-dotenv==1.0.0

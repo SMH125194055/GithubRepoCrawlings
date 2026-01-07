@@ -2,18 +2,28 @@
 name: GitHub Repository Crawler
 
 on:
-  # Run manually
+  # Manual trigger
   workflow_dispatch:
-  # Run daily at midnight UTC
+    inputs:
+      max_repos:
+        description: 'Maximum number of repositories to crawl'
+        required: false
+        default: '100000'
+        type: string
+  
+  # Scheduled daily run at midnight UTC
   schedule:
     - cron: '0 0 * * *'
-  # Run on push to main (for testing)
+  
+  # Run on push to main branch
   push:
     branches: [main]
 
 jobs:
   crawl:
+    name: Crawl GitHub Repositories
     runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hour timeout for large crawls
     
     # PostgreSQL service container
     services:
@@ -25,7 +35,7 @@ jobs:
           POSTGRES_DB: github_crawler
         ports:
           - 5432:5432
-        # Health check to ensure DB is ready
+        # Health check to ensure DB is ready before job starts
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -33,24 +43,25 @@ jobs:
           --health-retries 5
 
     steps:
-      # Step 1: Checkout code
+      # Step 1: Checkout repository code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2: Setup Python
+      # Step 2: Setup Python environment
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      # Step 3: Install dependencies
+      # Step 3: Install Python dependencies
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          echo "Dependencies installed successfully"
 
-      # Step 4: Setup PostgreSQL schema
+      # Step 4: Setup PostgreSQL database schema
       - name: Setup PostgreSQL
         env:
           PGHOST: localhost
@@ -59,23 +70,34 @@ jobs:
           PGPASSWORD: postgres
           PGDATABASE: github_crawler
         run: |
+          echo "Creating database schema..."
           psql -f scripts/setup_database.sql
+          echo "Database schema created successfully"
+          
+          # Verify tables were created
+          echo "Verifying tables..."
+          psql -c "\dt"
 
-      # Step 5: Crawl GitHub repositories
+      # Step 5: Run the crawler
       - name: Crawl Stars
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Default token, no setup needed!
+          # Uses the default GITHUB_TOKEN provided by GitHub Actions
+          # No need to create secrets - this works out of the box!
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DB_HOST: localhost
           DB_PORT: 5432
           DB_NAME: github_crawler
           DB_USER: postgres
           DB_PASSWORD: postgres
-          MAX_REPOS: 100000
+          MAX_REPOS: ${{ github.event.inputs.max_repos || '100000' }}
           OUTPUT_PATH: repositories.csv
         run: |
+          echo "Starting GitHub Repository Crawler..."
+          echo "Target: $MAX_REPOS repositories"
           python -m src.main
+          echo "Crawl completed!"
 
-      # Step 6: Dump database to JSON
+      # Step 6: Export database contents
       - name: Export Database
         env:
           PGHOST: localhost
@@ -84,19 +106,54 @@ jobs:
           PGPASSWORD: postgres
           PGDATABASE: github_crawler
         run: |
-          # Export as CSV
-          psql -c "\COPY (SELECT * FROM repositories ORDER BY stargazer_count DESC) TO 'db_dump.csv' WITH CSV HEADER"
+          echo "Exporting database contents..."
           
-          # Also create a JSON export
-          psql -t -c "SELECT json_agg(r) FROM (SELECT * FROM repositories ORDER BY stargazer_count DESC LIMIT 1000) r" > top_repos.json
+          # Get statistics
+          echo "=== Database Statistics ===" > stats.txt
+          psql -c "SELECT COUNT(*) as total_repos FROM repositories;" >> stats.txt
+          psql -c "SELECT AVG(stargazer_count)::int as avg_stars, MAX(stargazer_count) as max_stars, MIN(stargazer_count) as min_stars FROM repositories;" >> stats.txt
+          cat stats.txt
+          
+          # Export all data as CSV
+          echo "Exporting full data to CSV..."
+          psql -c "\COPY (SELECT id, node_id, full_name, owner_login, name, stargazer_count, created_at, updated_at FROM repositories ORDER BY stargazer_count DESC) TO 'db_dump.csv' WITH CSV HEADER"
+          
+          # Export top 1000 repos as JSON
+          echo "Exporting top 1000 repos to JSON..."
+          psql -t -c "SELECT json_agg(r) FROM (SELECT id, full_name, stargazer_count FROM repositories ORDER BY stargazer_count DESC LIMIT 1000) r" > top_repos.json
+          
+          # Show sample of results
+          echo "=== Sample Results (Top 10 by stars) ==="
+          psql -c "SELECT full_name, stargazer_count FROM repositories ORDER BY stargazer_count DESC LIMIT 10;"
+          
+          echo "Export completed!"
 
-      # Step 7: Upload artifacts
+      # Step 7: Upload results as artifacts
       - name: Upload Results
         uses: actions/upload-artifact@v4
         with:
-          name: crawler-results
+          name: crawler-results-${{ github.run_number }}
           path: |
             repositories.csv
             db_dump.csv
             top_repos.json
+            stats.txt
           retention-days: 30
+          if-no-files-found: warn
+
+      # Step 8: Summary
+      - name: Job Summary
+        run: |
+          echo "## 🕷️ GitHub Crawler Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Statistics" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          cat stats.txt >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- \`repositories.csv\` - Full export from crawler" >> $GITHUB_STEP_SUMMARY
+          echo "- \`db_dump.csv\` - Database dump (sorted by stars)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`top_repos.json\` - Top 1000 repos in JSON format" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Crawl completed successfully!" >> $GITHUB_STEP_SUMMARY

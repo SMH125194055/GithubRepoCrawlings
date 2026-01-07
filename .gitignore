@@ -1,2 +1,64 @@
+# .gitignore
+
+# Assignment PDFs (keep private)
 Details/
+
+# Environment files
 .env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing
+.tox/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Output files (generated during runs)
+*.csv
+*.json
+stats.txt
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Database files (for local testing)
+*.db
+*.sqlite
